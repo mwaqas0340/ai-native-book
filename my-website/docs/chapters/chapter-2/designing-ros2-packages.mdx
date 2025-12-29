@@ -1,0 +1,209 @@
+---
+title: "Designing ROS 2 Packages for Humanoid Robotics"
+sidebar_position: 6
+---
+
+# Designing ROS 2 Packages for Humanoid Robotics
+
+## Definition
+
+Designing ROS 2 packages for humanoid robotics involves creating modular, reusable software components that encapsulate specific functionalities required for human-like robotic systems. A ROS 2 package is the basic building block that contains nodes, libraries, and other resources needed to perform specific tasks. In humanoid robotics, packages typically handle perception, motion planning, control, and human-robot interaction. Proper package design ensures maintainability, reusability, and integration capabilities across different humanoid platforms.
+
+## Core Design Principles
+
+Effective ROS 2 package design for humanoid robotics follows several key principles:
+
+1. **Single Responsibility**: Each package should handle one specific aspect of humanoid functionality
+2. **Modularity**: Packages should be independent and loosely coupled
+3. **Reusability**: Designed to work across different humanoid platforms
+4. **Maintainability**: Clear interfaces and well-documented APIs
+5. **Performance**: Optimized for real-time constraints typical in humanoid systems
+
+### Package Structure
+
+A well-designed ROS 2 package for humanoid robotics typically includes:
+
+- **Nodes**: Executable components that perform specific tasks
+- **Message/Service Definitions**: Custom data structures for communication
+- **Configuration Files**: Parameters and settings for different robot platforms
+- **Launch Files**: Scripts to start multiple nodes with appropriate parameters
+- **Tests**: Unit and integration tests for validation
+- **Documentation**: API documentation and usage examples
+
+## How It Works in Physical AI Context
+
+ROS 2 packages for humanoid robotics enable:
+
+- **Distributed Processing**: Different aspects of humanoid behavior can run on separate nodes
+- **Hardware Abstraction**: Same algorithms can work with different physical platforms
+- **Simulation Integration**: Packages can work in both simulated and real environments
+- **Collaborative Development**: Multiple teams can develop different packages simultaneously
+- **Standardization**: Consistent interfaces across different humanoid implementations
+
+The package design allows for complex humanoid behaviors to be built from simpler, well-defined components that communicate through standardized ROS 2 interfaces.
+
+## Example: ROS 2 Package for Humanoid Motion Control
+
+Here's an example of a ROS 2 package structure for humanoid motion control:
+
+```python
+# motion_control_nodes/motion_controller.py
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+from geometry_msgs.msg import Twist, Pose
+from std_msgs.msg import String
+from builtin_interfaces.msg import Duration
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+import numpy as np
+
+class HumanoidMotionController(Node):
+    """
+    ROS 2 node for controlling humanoid robot motion
+    """
+
+    def __init__(self):
+        super().__init__('humanoid_motion_controller')
+
+        # Publishers
+        self.joint_cmd_pub = self.create_publisher(
+            JointTrajectory, 'joint_trajectory_commands', 10
+        )
+        self.status_pub = self.create_publisher(String, 'motion_status', 10)
+
+        # Subscribers
+        self.joint_state_sub = self.create_subscription(
+            JointState, 'joint_states', self.joint_state_callback, 10
+        )
+        self.cmd_vel_sub = self.create_subscription(
+            Twist, 'cmd_vel', self.cmd_vel_callback, 10
+        )
+
+        # Timer for control loop
+        self.control_timer = self.create_timer(0.02, self.control_loop)  # 50Hz
+
+        # Internal state
+        self.current_joints = JointState()
+        self.desired_velocity = Twist()
+        self.motion_status = "idle"
+        self.walk_pattern = None
+
+        self.get_logger().info('Humanoid Motion Controller initialized')
+
+    def joint_state_callback(self, msg):
+        """Update current joint state"""
+        self.current_joints = msg
+        self.get_logger().debug(f'Updated joint state for {len(msg.name)} joints')
+
+    def cmd_vel_callback(self, msg):
+        """Process velocity commands"""
+        self.desired_velocity = msg
+        self.get_logger().debug(f'Received velocity command: {msg.linear.x}, {msg.angular.z}')
+
+    def control_loop(self):
+        """Main control loop for humanoid motion"""
+        if self.motion_status == "walking":
+            trajectory = self.generate_walking_trajectory()
+            self.joint_cmd_pub.publish(trajectory)
+
+    def generate_walking_trajectory(self):
+        """Generate joint trajectory for walking motion"""
+        trajectory = JointTrajectory()
+        trajectory.joint_names = [
+            'left_hip', 'left_knee', 'left_ankle',
+            'right_hip', 'right_knee', 'right_ankle',
+            'left_shoulder', 'left_elbow',
+            'right_shoulder', 'right_elbow'
+        ]
+
+        # Create trajectory points for walking pattern
+        points = []
+
+        # Current time
+        current_time = self.get_clock().now().to_msg()
+
+        # Generate walking pattern (simplified for example)
+        for i in range(10):  # 10 trajectory points
+            point = JointTrajectoryPoint()
+
+            # Calculate joint positions based on walking pattern
+            t = i * 0.1  # Time step
+
+            # Hip joints - alternate for walking
+            left_hip_pos = 0.1 * np.sin(2 * np.pi * t)
+            right_hip_pos = 0.1 * np.sin(2 * np.pi * t + np.pi)
+
+            # Knee joints - follow hip with phase offset
+            left_knee_pos = 0.05 * np.sin(2 * np.pi * t + np.pi/2)
+            right_knee_pos = 0.05 * np.sin(2 * np.pi * t + 3*np.pi/2)
+
+            # Ankle joints - balance adjustment
+            left_ankle_pos = -0.02 * np.sin(2 * np.pi * t)
+            right_ankle_pos = -0.02 * np.sin(2 * np.pi * t + np.pi)
+
+            # Arm joints - natural swing
+            left_shoulder_pos = 0.05 * np.sin(2 * np.pi * t + np.pi)
+            left_elbow_pos = 0.02 * np.sin(2 * np.pi * t)
+            right_shoulder_pos = 0.05 * np.sin(2 * np.pi * t)
+            right_elbow_pos = 0.02 * np.sin(2 * np.pi * t + np.pi)
+
+            point.positions = [
+                left_hip_pos, left_knee_pos, left_ankle_pos,
+                right_hip_pos, right_knee_pos, right_ankle_pos,
+                left_shoulder_pos, left_elbow_pos,
+                right_shoulder_pos, right_elbow_pos
+            ]
+
+            # Set velocities to zero (for simplicity)
+            point.velocities = [0.0] * len(point.positions)
+
+            # Set accelerations to zero (for simplicity)
+            point.accelerations = [0.0] * len(point.positions)
+
+            # Set time from start
+            point.time_from_start = Duration(sec=0, nanosec=int(1e8 * (i + 1)))
+
+            points.append(point)
+
+        trajectory.points = points
+        return trajectory
+
+    def start_walking(self):
+        """Start walking motion"""
+        self.motion_status = "walking"
+        status_msg = String()
+        status_msg.data = "walking"
+        self.status_pub.publish(status_msg)
+        self.get_logger().info('Started walking motion')
+
+    def stop_walking(self):
+        """Stop walking motion"""
+        self.motion_status = "idle"
+        status_msg = String()
+        status_msg.data = "idle"
+        self.status_pub.publish(status_msg)
+        self.get_logger().info('Stopped walking motion')
+
+def main(args=None):
+    rclpy.init(args=args)
+    controller = HumanoidMotionController()
+
+    try:
+        rclpy.spin(controller)
+    except KeyboardInterrupt:
+        controller.get_logger().info('Shutting down Humanoid Motion Controller')
+    finally:
+        controller.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+## Key Takeaways
+
+- ROS 2 packages provide modular, reusable components for humanoid robotics
+- Proper design follows single responsibility and loose coupling principles
+- Packages enable distributed processing and hardware abstraction
+- Standard interfaces facilitate integration across different platforms
+- Well-structured packages support both simulation and real-world deployment

@@ -1,0 +1,405 @@
+---
+title: "Advanced Control Strategies"
+sidebar_position: 4
+---
+
+# Advanced Control Strategies
+
+## Definition
+
+Advanced control strategies in Physical AI represent sophisticated approaches to robot control that go beyond traditional PID controllers to address the complex dynamics and environmental interactions inherent in physical systems. These strategies include model predictive control (MPC), adaptive control, robust control, and learning-based control methods that can handle uncertainty, non-linear dynamics, and changing environmental conditions. Advanced control is crucial for Physical AI systems that must operate reliably in unstructured environments while performing complex manipulation and navigation tasks.
+
+The field encompasses both classical control theory extensions and modern learning-based approaches, including reinforcement learning, imitation learning, and hybrid systems that combine analytical models with data-driven components. These strategies enable robots to achieve precise control in the face of modeling uncertainties, external disturbances, and complex contact interactions with the environment.
+
+## How It Works
+
+Advanced control strategies operate through multiple interconnected mechanisms:
+
+### Model-Based Approaches
+- **Model Predictive Control (MPC)**: Uses predictive models to optimize control actions over a finite time horizon while considering constraints and disturbances
+- **Linear Quadratic Regulator (LQR)**: Optimizes control inputs based on quadratic cost functions and linear system models
+- **Robust Control**: Designs controllers that maintain stability and performance despite model uncertainties and external disturbances
+
+### Learning-Based Approaches
+- **Reinforcement Learning**: Learns optimal control policies through trial and error in simulated or real environments
+- **Imitation Learning**: Acquires control behaviors by learning from expert demonstrations
+- **Adaptive Control**: Adjusts control parameters online based on system identification and performance feedback
+
+### Hybrid Strategies
+- **Learning-Augmented Control**: Combines analytical models with neural networks for enhanced performance
+- **Hierarchical Control**: Implements multiple control layers with different time scales and objectives
+- **Multi-Objective Control**: Balances competing objectives like speed, accuracy, and energy efficiency
+
+### Physical AI Specific Considerations
+- **Contact-Rich Manipulation**: Handling complex contact dynamics during grasping and manipulation
+- **Underactuated Systems**: Controlling systems with fewer actuators than degrees of freedom
+- **Variable Impedance Control**: Adjusting mechanical impedance for safe human-robot interaction
+
+## Practical Example
+
+### Model Predictive Control for Mobile Manipulation
+A mobile manipulator robot tasked with picking objects from a moving conveyor belt requires advanced control to handle the dynamic environment:
+
+1. **State Estimation**: Continuously estimate the position and velocity of both the robot and target objects
+2. **Prediction Model**: Predict future states of the system over a finite horizon considering kinematic constraints
+3. **Optimization**: Solve an optimization problem to determine optimal control inputs that minimize tracking error while respecting physical constraints
+4. **Receding Horizon**: Execute the first control input and repeat the process with updated state information
+
+### Reinforcement Learning for Robotic Grasping
+A robot learning to grasp objects of varying shapes and materials might use:
+
+1. **Environment Setup**: Create simulation environments with diverse objects and scenarios
+2. **Reward Design**: Define reward functions that encourage successful grasps while penalizing failures
+3. **Policy Learning**: Train neural networks to map sensor observations to control actions
+4. **Sim-to-Real Transfer**: Apply learned policies to real robots with domain randomization techniques
+
+### Adaptive Control for Uncertain Dynamics
+For a robot operating in changing environmental conditions:
+
+1. **Online System Identification**: Continuously estimate system parameters as conditions change
+2. **Parameter Adjustment**: Update controller parameters based on identified system characteristics
+3. **Performance Monitoring**: Track control performance and trigger adaptation when degradation occurs
+4. **Stability Guarantees**: Maintain stability during adaptation using Lyapunov-based methods
+
+## Code Example
+
+Here's an implementation of an advanced control system using Model Predictive Control for a mobile manipulator:
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState, LaserScan
+from geometry_msgs.msg import Twist, PoseStamped
+from nav_msgs.msg import Odometry
+from std_msgs.msg import Float64MultiArray
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+import numpy as np
+from scipy.optimize import minimize
+from scipy.linalg import block_diag
+import casadi as ca
+import math
+import threading
+
+
+class AdvancedControlNode(Node):
+    """
+    A ROS 2 node implementing advanced control strategies for Physical AI applications
+    using Model Predictive Control and adaptive control techniques
+    """
+
+    def __init__(self):
+        super().__init__('advanced_control_node')
+
+        # QoS profiles for different data types
+        sensor_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        cmd_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
+
+        # Publishers for robot commands and control status
+        self.cmd_vel_pub = self.create_publisher(Twist, '/robot/cmd_vel', cmd_qos)
+        self.joint_cmd_pub = self.create_publisher(Float64MultiArray, '/robot/joint_commands', cmd_qos)
+        self.control_status_pub = self.create_publisher(Float64MultiArray, '/control/status', cmd_qos)
+
+        # Subscribers for sensor data and goals
+        self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, sensor_qos)
+        self.joint_state_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, sensor_qos)
+        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, sensor_qos)
+        self.goal_sub = self.create_subscription(PoseStamped, '/goal_pose', self.goal_callback, cmd_qos)
+
+        # Initialize data storage and control components
+        self.data_lock = threading.RLock()
+        self.current_odom = None
+        self.current_joints = None
+        self.latest_scan = None
+        self.current_goal = None
+
+        # MPC parameters
+        self.horizon = 20  # Prediction horizon
+        self.dt = 0.05     # Time step (20Hz)
+        self.control_dim = 6  # [vx, vy, vz, wx, wy, wz] + joint velocities
+
+        # Robot dynamics parameters
+        self.mass = 10.0  # kg
+        self.inertia = np.eye(3) * 0.1  # kg*m^2
+        self.max_velocity = 1.0  # m/s
+        self.max_angular_velocity = 1.0  # rad/s
+
+        # Adaptive control parameters
+        self.param_estimate = np.array([1.0, 1.0, 1.0])  # [mass, friction, etc.]
+        self.gamma = 0.1  # Adaptation rate
+        self.param_bounds = [(0.1, 20.0), (0.01, 10.0), (0.01, 10.0)]  # Parameter bounds
+
+        # MPC optimization setup
+        self.setup_mpc_optimization()
+
+        # Control timers
+        self.control_timer = self.create_timer(0.05, self.advanced_control_loop)  # 20Hz
+        self.adaptation_timer = self.create_timer(0.1, self.adaptive_parameter_update)  # 10Hz
+
+        self.get_logger().info('Advanced Control Node initialized with MPC and adaptive control')
+
+    def setup_mpc_optimization(self):
+        """Set up the MPC optimization problem using CasADi"""
+        # Define symbolic variables
+        self.opti = ca.Opti()
+
+        # Decision variables: control inputs over the horizon
+        self.U = self.opti.variable(self.control_dim, self.horizon)
+
+        # State variables (simplified for this example)
+        self.X = self.opti.variable(12, self.horizon + 1)  # [pos, vel, orient, ang_vel]
+
+        # Parameters (current state, goal, etc.)
+        self.X0 = self.opti.parameter(12)  # Initial state
+        self.GOAL = self.opti.parameter(3)  # Goal position [x, y, z]
+
+        # Cost function weights
+        self.Q_pos = np.diag([1.0, 1.0, 1.0])  # Position tracking cost
+        self.Q_vel = np.diag([0.1, 0.1, 0.1])  # Velocity cost
+        self.R = np.eye(self.control_dim) * 0.01  # Control effort cost
+        self.Q_terminal = np.diag([5.0, 5.0, 5.0])  # Terminal cost
+
+        # Dynamics constraints
+        self.setup_dynamics_constraints()
+
+        # Objective function
+        self.setup_objective_function()
+
+        # Solver options
+        self.opti.solver('ipopt', {'ipopt.print_level': 0, 'print_time': 0})
+
+    def setup_dynamics_constraints(self):
+        """Set up the dynamics constraints for the MPC problem"""
+        # Simplified differential drive dynamics
+        # In practice, this would be more complex with full robot dynamics
+        for k in range(self.horizon):
+            x_k = self.X[:3, k]      # Position
+            v_k = self.X[3:6, k]     # Linear velocity
+            u_k = self.U[:, k]       # Control input [vx, vy, vz, wx, wy, wz, joint_vels...]
+
+            # Simple kinematic model (in practice, use more detailed dynamics)
+            # dx/dt = v
+            self.opti.subject_to(self.X[:3, k+1] == x_k + self.dt * v_k)
+
+            # dv/dt = u (simplified)
+            self.opti.subject_to(self.X[3:6, k+1] == v_k + self.dt * u_k[:3])
+
+            # Add other state dynamics (orientation, joint angles, etc.)
+
+    def setup_objective_function(self):
+        """Set up the MPC objective function"""
+        cost = 0
+
+        # Tracking cost for each time step
+        for k in range(self.horizon):
+            pos_error = self.X[:3, k] - self.GOAL
+            vel_cost = ca.mtimes(self.X[3:6, k].T, ca.mtimes(self.Q_vel, self.X[3:6, k]))
+            pos_cost = ca.mtimes(pos_error.T, ca.mtimes(self.Q_pos, pos_error))
+            control_cost = ca.mtimes(self.U[:, k].T, ca.mtimes(self.R, self.U[:, k]))
+
+            cost += pos_cost + vel_cost + control_cost
+
+        # Terminal cost
+        final_pos_error = self.X[:3, -1] - self.GOAL
+        terminal_cost = ca.mtimes(final_pos_error.T, ca.mtimes(self.Q_terminal, final_pos_error))
+        cost += terminal_cost
+
+        self.opti.minimize(cost)
+
+    def odom_callback(self, msg):
+        """Process odometry data for state estimation"""
+        with self.data_lock:
+            self.current_odom = msg
+
+    def joint_state_callback(self, msg):
+        """Process joint state data"""
+        with self.data_lock:
+            self.current_joints = msg
+
+    def scan_callback(self, msg):
+        """Process laser scan data for obstacle avoidance"""
+        with self.data_lock:
+            self.latest_scan = msg
+
+    def goal_callback(self, msg):
+        """Process goal pose commands"""
+        with self.data_lock:
+            self.current_goal = msg
+
+    def advanced_control_loop(self):
+        """Main advanced control loop with MPC"""
+        with self.data_lock:
+            if not self.current_odom or not self.current_goal:
+                return
+
+            # Extract current state from odometry
+            current_pos = np.array([
+                self.current_odom.pose.pose.position.x,
+                self.current_odom.pose.pose.position.y,
+                self.current_odom.pose.pose.position.z
+            ])
+
+            current_vel = np.array([
+                self.current_odom.twist.twist.linear.x,
+                self.current_odom.twist.twist.linear.y,
+                self.current_odom.twist.twist.linear.z
+            ])
+
+            # Set up MPC problem with current state and goal
+            current_state = np.concatenate([current_pos, current_vel, np.zeros(6)])  # Add orientation/other states
+            goal_pos = np.array([
+                self.current_goal.pose.position.x,
+                self.current_goal.pose.position.y,
+                self.current_goal.pose.position.z
+            ])
+
+            try:
+                # Set parameters
+                self.opti.set_value(self.X0, current_state)
+                self.opti.set_value(self.GOAL, goal_pos)
+
+                # Solve MPC problem
+                sol = self.opti.solve()
+
+                # Get optimal control input
+                optimal_controls = sol.value(self.U)
+
+                # Apply first control input
+                first_control = optimal_controls[:, 0]
+
+                # Publish velocity command
+                cmd_vel = Twist()
+                cmd_vel.linear.x = first_control[0]
+                cmd_vel.linear.y = first_control[1]
+                cmd_vel.linear.z = first_control[2]
+                cmd_vel.angular.x = first_control[3]
+                cmd_vel.angular.y = first_control[4]
+                cmd_vel.angular.z = first_control[5]
+
+                self.cmd_vel_pub.publish(cmd_vel)
+
+                # Log control information
+                self.get_logger().info(f'MPC control applied: {first_control[:3]} m/s, {first_control[3:6]} rad/s')
+
+            except Exception as e:
+                self.get_logger().error(f'MPC optimization failed: {e}')
+
+                # Fallback control
+                fallback_cmd = self.compute_fallback_control(current_pos, goal_pos, current_vel)
+                self.cmd_vel_pub.publish(fallback_cmd)
+
+    def compute_fallback_control(self, current_pos, goal_pos, current_vel):
+        """Compute fallback control if MPC fails"""
+        cmd_vel = Twist()
+
+        # Simple proportional controller as fallback
+        error = goal_pos - current_pos
+        dist = np.linalg.norm(error)
+
+        if dist > 0.1:  # 10cm threshold
+            direction = error / dist
+            speed = min(0.5, dist * 0.5)  # Proportional with saturation
+
+            cmd_vel.linear.x = speed * direction[0]
+            cmd_vel.linear.y = speed * direction[1]
+            cmd_vel.linear.z = speed * direction[2]
+        else:
+            # Goal reached, stop
+            cmd_vel.linear.x = 0.0
+            cmd_vel.linear.y = 0.0
+            cmd_vel.linear.z = 0.0
+
+        return cmd_vel
+
+    def adaptive_parameter_update(self):
+        """Update parameters adaptively based on tracking performance"""
+        with self.data_lock:
+            if not self.current_odom or not self.current_goal:
+                return
+
+            # Compute tracking error
+            current_pos = np.array([
+                self.current_odom.pose.pose.position.x,
+                self.current_odom.pose.pose.position.y,
+                self.current_odom.pose.pose.position.z
+            ])
+
+            goal_pos = np.array([
+                self.current_goal.pose.position.x,
+                self.current_goal.pose.position.y,
+                self.current_goal.pose.position.z
+            ])
+
+            tracking_error = goal_pos - current_pos
+
+            # Compute parameter update using gradient descent
+            # This is a simplified example - in practice, use more sophisticated adaptation laws
+            error_jacobian = self.compute_error_jacobian(current_pos, goal_pos)
+
+            # Update parameter estimates
+            param_update = self.gamma * error_jacobian.T @ tracking_error
+            self.param_estimate = np.clip(
+                self.param_estimate + param_update,
+                [b[0] for b in self.param_bounds],
+                [b[1] for b in self.param_bounds]
+            )
+
+            self.get_logger().info(f'Adaptive parameters: {self.param_estimate}')
+
+    def compute_error_jacobian(self, current_pos, goal_pos):
+        """Compute the jacobian of tracking error with respect to parameters"""
+        # Simplified jacobian - in practice, derive from system dynamics
+        # This represents how parameter changes affect the tracking error
+        return np.array([
+            [1.0, 0.0, 0.0],  # Effect of mass on x-error
+            [0.0, 1.0, 0.0],  # Effect of friction on y-error
+            [0.0, 0.0, 1.0]   # Effect of other parameter on z-error
+        ])
+
+    def publish_control_status(self):
+        """Publish control system status for monitoring"""
+        status_msg = Float64MultiArray()
+
+        with self.data_lock:
+            status_data = [
+                self.param_estimate[0],  # Estimated mass
+                self.param_estimate[1],  # Estimated friction
+                self.param_estimate[2],  # Other parameter
+                len(self.current_goal.pose.position.x) if self.current_goal else 0.0,  # Has goal
+                1.0 if self.current_odom else 0.0,  # Has odometry
+            ]
+
+        status_msg.data = status_data
+        self.control_status_pub.publish(status_msg)
+
+    def emergency_stop(self):
+        """Execute emergency stop"""
+        cmd_vel = Twist()
+        self.cmd_vel_pub.publish(cmd_vel)
+        self.get_logger().warn('Emergency stop executed')
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = AdvancedControlNode()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info('Shutting down Advanced Control Node')
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+## Key Takeaways
+
+- **Model Predictive Control**: Enables optimal control over finite horizons while handling constraints and disturbances
+- **Adaptive Control**: Allows controllers to adjust to changing system dynamics and environmental conditions
+- **Robustness**: Advanced strategies maintain performance despite modeling uncertainties and external disturbances
+- **Learning Integration**: Combining classical control with learning methods for enhanced capabilities
+- **Multi-Objective Optimization**: Balancing competing objectives like speed, accuracy, and energy efficiency
+- **Real-time Implementation**: Ensuring computational efficiency for real-time control applications

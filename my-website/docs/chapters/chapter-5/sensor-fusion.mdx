@@ -1,0 +1,375 @@
+---
+title: "Sensor Fusion and State Estimation"
+sidebar_position: 5
+---
+
+# Sensor Fusion and State Estimation for Advanced Physical AI
+
+## Definition
+
+Sensor fusion and state estimation are fundamental technologies in advanced Physical AI systems that enable robots to create accurate, consistent representations of their environment and internal state by combining data from multiple sensors. Sensor fusion integrates information from diverse sensor modalities (cameras, LIDAR, IMU, GPS, encoders) to provide more reliable, accurate, and robust perception than any single sensor could achieve alone. State estimation involves determining the robot's pose, velocity, and other relevant state variables by processing sensor measurements over time, often using probabilistic methods to handle uncertainty and noise. These technologies are critical for Physical AI systems that must operate reliably in complex, dynamic environments.
+
+## Core Components and Architecture
+
+### Sensor Fusion Techniques
+- **Kalman Filtering**: Optimal estimation for linear systems with Gaussian noise, including Extended Kalman Filters (EKF) and Unscented Kalman Filters (UKF) for non-linear systems
+- **Particle Filtering**: Monte Carlo methods for non-linear, non-Gaussian state estimation
+- **Bayesian Inference**: Probabilistic frameworks for combining uncertain sensor measurements
+- **Multi-Hypothesis Tracking**: Maintaining multiple possible interpretations of sensor data
+
+### Data Integration Methods
+- **Early Fusion**: Combining raw sensor data before processing
+- **Late Fusion**: Combining processed sensor outputs
+- **Deep Fusion**: Integration at multiple processing levels
+- **Temporal Fusion**: Combining measurements across time to improve estimates
+
+### State Representation
+- **Pose Estimation**: Position and orientation in 3D space
+- **Velocity Estimation**: Linear and angular velocities
+- **Uncertainty Quantification**: Covariance matrices and confidence measures
+- **Multi-Object Tracking**: Estimating states of multiple entities simultaneously
+
+## How It Works in Physical AI Context
+
+In advanced Physical AI systems, sensor fusion and state estimation serve as the foundation for reliable perception and decision-making:
+
+### Environmental Understanding
+- **Robust Perception**: Combining visual, range, and inertial sensors to create reliable environmental models
+- **Dynamic Environment Tracking**: Monitoring moving objects and changing conditions
+- **Uncertainty Management**: Quantifying and propagating uncertainty through the system
+- **Multi-Modal Integration**: Fusing data from different sensor types with different characteristics
+
+### Robot State Estimation
+- **Localization**: Determining robot position and orientation relative to environment
+- **Mapping**: Building environmental models from sensor data
+- **Motion Estimation**: Tracking robot velocity and acceleration
+- **Sensor Calibration**: Maintaining accurate sensor models and parameters
+
+### Decision Making Support
+- **Action Planning**: Providing accurate state information for planning algorithms
+- **Safety Monitoring**: Detecting unsafe conditions through sensor fusion
+- **Adaptive Control**: Adjusting control strategies based on environmental state
+
+## Example: Advanced Sensor Fusion Node
+
+Here's an example demonstrating advanced sensor fusion for Physical AI applications:
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Imu, LaserScan, PointCloud2, NavSatFix
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseWithCovarianceStamped, TwistWithCovarianceStamped
+from geometry_msgs.msg import Vector3Stamped
+from std_msgs.msg import Header
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+import math
+from filterpy.kalman import ExtendedKalmanFilter
+from filterpy.common import Q_discrete_white_noise
+import threading
+
+
+class AdvancedSensorFusionNode(Node):
+    """
+    A ROS 2 node implementing advanced sensor fusion for Physical AI applications
+    using Extended Kalman Filter and multiple sensor integration
+    """
+
+    def __init__(self):
+        super().__init__('advanced_sensor_fusion')
+
+        # QoS profiles for different data types
+        sensor_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        cmd_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
+
+        # Publishers for fused state estimates
+        self.odom_pub = self.create_publisher(Odometry, '/fused_odom', cmd_qos)
+        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, '/fused_pose', cmd_qos)
+        self.twist_pub = self.create_publisher(TwistWithCovarianceStamped, '/fused_twist', cmd_qos)
+
+        # Subscribers for multiple sensor types
+        self.imu_sub = self.create_subscription(Imu, '/imu/data', self.imu_callback, sensor_qos)
+        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, sensor_qos)
+        self.gps_sub = self.create_subscription(NavSatFix, '/gps/fix', self.gps_callback, sensor_qos)
+        self.odom_sub = self.create_subscription(Odometry, '/wheel_odom', self.wheel_odom_callback, sensor_qos)
+
+        # Initialize Extended Kalman Filter
+        self.initialize_ekf()
+
+        # Data storage with thread safety
+        self.data_lock = threading.RLock()
+        self.latest_imu = None
+        self.latest_scan = None
+        self.latest_gps = None
+        self.latest_wheel_odom = None
+
+        # Sensor fusion weights and parameters
+        self.imu_weight = 0.8
+        self.gps_weight = 0.3
+        self.odom_weight = 0.7
+        self.scan_weight = 0.5
+
+        # Fusion update timers
+        self.fusion_timer = self.create_timer(0.02, self.fusion_update)  # 50Hz fusion
+        self.publish_timer = self.create_timer(0.05, self.publish_fused_state)  # 20Hz publishing
+
+        self.get_logger().info('Advanced Sensor Fusion Node initialized')
+
+    def initialize_ekf(self):
+        """Initialize Extended Kalman Filter for state estimation"""
+        # State vector: [x, y, z, roll, pitch, yaw, vx, vy, vz, wx, wy, wz]
+        # (position, orientation, linear velocity, angular velocity)
+        self.ekf = ExtendedKalmanFilter(dim_x=12, dim_z=6)  # Reduced for example
+
+        # Initial state (position, orientation, velocities)
+        self.ekf.x = np.array([0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])
+
+        # Initial covariance (high uncertainty)
+        self.ekf.P = np.eye(12) * 1000.0
+
+        # Process noise (system model uncertainty)
+        self.ekf.Q = np.eye(12) * 0.1
+
+        # Measurement noise
+        self.ekf.R = np.eye(6) * 1.0  # Measurement noise for [x, y, z, vx, vy, vz]
+
+        # Measurement function (simplified)
+        self.ekf.H = np.zeros((6, 12))
+        self.ekf.H[0, 0] = 1.0  # x position
+        self.ekf.H[1, 1] = 1.0  # y position
+        self.ekf.H[2, 2] = 1.0  # z position
+        self.ekf.H[3, 6] = 1.0  # x velocity
+        self.ekf.H[4, 7] = 1.0  # y velocity
+        self.ekf.H[5, 8] = 1.0  # z velocity
+
+        # State transition function (simplified constant velocity model)
+        self.dt = 0.02  # 50Hz update rate
+
+    def imu_callback(self, msg):
+        """Process IMU data for orientation and angular velocity"""
+        with self.data_lock:
+            self.latest_imu = msg
+
+            # Extract orientation from IMU
+            orientation = msg.orientation
+            # Convert quaternion to Euler angles
+            sinr_cosp = 2 * (orientation.w * orientation.x + orientation.y * orientation.z)
+            cosr_cosp = 1 - 2 * (orientation.x * orientation.x + orientation.y * orientation.y)
+            roll = math.atan2(sinr_cosp, cosr_cosp)
+
+            sinp = 2 * (orientation.w * orientation.y - orientation.z * orientation.x)
+            pitch = math.asin(sinp)
+
+            siny_cosp = 2 * (orientation.w * orientation.z + orientation.x * orientation.y)
+            cosy_cosp = 1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+
+            # Extract angular velocity
+            angular_velocity = msg.angular_velocity
+            linear_acceleration = msg.linear_acceleration
+
+            # Update internal state with IMU data
+            self.imu_state = {
+                'orientation': (roll, pitch, yaw),
+                'angular_velocity': (angular_velocity.x, angular_velocity.y, angular_velocity.z),
+                'linear_acceleration': (linear_acceleration.x, linear_acceleration.y, linear_acceleration.z)
+            }
+
+    def scan_callback(self, msg):
+        """Process LIDAR scan data for environment mapping"""
+        with self.data_lock:
+            self.latest_scan = msg
+
+            # Process scan to extract features for fusion
+            # Find closest obstacles in different sectors
+            if msg.ranges:
+                # Divide scan into front, left, right, back sectors
+                sector_size = len(msg.ranges) // 4
+                front_sector = msg.ranges[:sector_size]
+                right_sector = msg.ranges[sector_size:2*sector_size]
+                back_sector = msg.ranges[2*sector_size:3*sector_size]
+                left_sector = msg.ranges[3*sector_size:]
+
+                # Find minimum distances in each sector
+                self.scan_features = {
+                    'front': min([r for r in front_sector if 0 < r < msg.range_max], default=float('inf')),
+                    'right': min([r for r in right_sector if 0 < r < msg.range_max], default=float('inf')),
+                    'back': min([r for r in back_sector if 0 < r < msg.range_max], default=float('inf')),
+                    'left': min([r for r in left_sector if 0 < r < msg.range_max], default=float('inf'))
+                }
+
+    def gps_callback(self, msg):
+        """Process GPS data for absolute position"""
+        with self.data_lock:
+            self.latest_gps = msg
+
+            # Convert GPS coordinates to local frame if needed
+            # For this example, we'll use the raw coordinates
+            self.gps_state = {
+                'latitude': msg.latitude,
+                'longitude': msg.longitude,
+                'altitude': msg.altitude,
+                'position_covariance': msg.position_covariance,
+                'position_covariance_type': msg.position_covariance_type
+            }
+
+    def wheel_odom_callback(self, msg):
+        """Process wheel odometry data for relative position"""
+        with self.data_lock:
+            self.latest_wheel_odom = msg
+
+            # Extract pose and twist from wheel odometry
+            pose = msg.pose.pose
+            twist = msg.twist.twist
+
+            self.wheel_odom_state = {
+                'position': (pose.position.x, pose.position.y, pose.position.z),
+                'orientation': (pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w),
+                'linear_velocity': (twist.linear.x, twist.linear.y, twist.linear.z),
+                'angular_velocity': (twist.angular.x, twist.angular.y, twist.angular.z),
+                'pose_covariance': msg.pose.covariance,
+                'twist_covariance': msg.twist.covariance
+            }
+
+    def fusion_update(self):
+        """Perform sensor fusion update using EKF"""
+        with self.data_lock:
+            # Prepare measurement vector
+            z = self.prepare_measurement_vector()
+            if z is not None:
+                # Update EKF with measurement
+                try:
+                    self.ekf.update(z)
+                except Exception as e:
+                    self.get_logger().warn(f'EKF update failed: {e}')
+
+            # Perform prediction step (constant velocity model)
+            self.ekf.predict()
+
+    def prepare_measurement_vector(self):
+        """Prepare measurement vector from available sensor data"""
+        measurements = []
+
+        # Use wheel odometry for position and velocity when available
+        if self.latest_wheel_odom:
+            pose = self.latest_wheel_odom.pose.pose
+            twist = self.latest_wheel_odom.twist.twist
+            measurements.extend([
+                pose.position.x * self.odom_weight,
+                pose.position.y * self.odom_weight,
+                pose.position.z * self.odom_weight,
+                twist.linear.x * self.odom_weight,
+                twist.linear.y * self.odom_weight,
+                twist.linear.z * self.odom_weight
+            ])
+        else:
+            # Use zeros if no wheel odometry available
+            measurements.extend([0, 0, 0, 0, 0, 0])
+
+        # If we have valid measurements, return them
+        if len(measurements) >= 6:
+            # Average with current measurements to avoid large jumps
+            if hasattr(self, 'prev_measurements'):
+                alpha = 0.1  # Smoothing factor
+                z = np.array(measurements[:6]) * alpha + np.array(self.prev_measurements) * (1 - alpha)
+            else:
+                z = np.array(measurements[:6])
+
+            self.prev_measurements = measurements[:6]
+            return z
+
+        return None
+
+    def publish_fused_state(self):
+        """Publish the fused state estimate"""
+        with self.data_lock:
+            # Create Odometry message with fused state
+            odom_msg = Odometry()
+            odom_msg.header = Header()
+            odom_msg.header.stamp = self.get_clock().now().to_msg()
+            odom_msg.header.frame_id = 'map'
+            odom_msg.child_frame_id = 'base_link'
+
+            # Fill in position from EKF state
+            odom_msg.pose.pose.position.x = self.ekf.x[0]
+            odom_msg.pose.pose.position.y = self.ekf.x[1]
+            odom_msg.pose.pose.position.z = self.ekf.x[2]
+
+            # Fill in orientation (simplified - would need proper quaternion from roll/pitch/yaw)
+            # For this example, we'll use a placeholder quaternion
+            odom_msg.pose.pose.orientation.w = 1.0  # No rotation initially
+
+            # Fill in velocities
+            odom_msg.twist.twist.linear.x = self.ekf.x[6]
+            odom_msg.twist.twist.linear.y = self.ekf.x[7]
+            odom_msg.twist.twist.linear.z = self.ekf.x[8]
+
+            # Fill in covariance matrices from EKF
+            # Position covariance
+            for i in range(6):
+                for j in range(6):
+                    idx = i * 6 + j
+                    if idx < len(odom_msg.pose.covariance):
+                        odom_msg.pose.covariance[idx] = self.ekf.P[i, j]
+
+            # Velocity covariance
+            for i in range(6):
+                for j in range(6):
+                    idx = i * 6 + j
+                    if idx < len(odom_msg.twist.covariance):
+                        odom_msg.twist.covariance[idx] = self.ekf.P[i+6, j+6] if i+6 < 12 and j+6 < 12 else 0.0
+
+            # Publish fused odometry
+            self.odom_pub.publish(odom_msg)
+
+            # Publish pose with covariance
+            pose_cov_msg = PoseWithCovarianceStamped()
+            pose_cov_msg.header = odom_msg.header
+            pose_cov_msg.pose = odom_msg.pose
+            self.pose_pub.publish(pose_cov_msg)
+
+            # Publish twist with covariance
+            twist_cov_msg = TwistWithCovarianceStamped()
+            twist_cov_msg.header = odom_msg.header
+            twist_cov_msg.twist = odom_msg.twist
+            self.twist_pub.publish(twist_cov_msg)
+
+    def get_fused_state(self):
+        """Get current fused state estimate"""
+        with self.data_lock:
+            return {
+                'position': (self.ekf.x[0], self.ekf.x[1], self.ekf.x[2]),
+                'velocity': (self.ekf.x[6], self.ekf.x[7], self.ekf.x[8]),
+                'orientation': (self.ekf.x[3], self.ekf.x[4], self.ekf.x[5]),
+                'angular_velocity': (self.ekf.x[9], self.ekf.x[10], self.ekf.x[11]),
+                'covariance': self.ekf.P.copy()
+            }
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = AdvancedSensorFusionNode()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info('Shutting down Advanced Sensor Fusion Node')
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+## Key Takeaways
+
+- **Multi-Sensor Integration**: Effective sensor fusion combines data from multiple modalities to improve reliability and accuracy
+- **Probabilistic Methods**: Kalman filters and particle filters provide principled approaches to handling uncertainty in sensor data
+- **Real-time Processing**: Sensor fusion algorithms must operate in real-time to support responsive Physical AI systems
+- **State Estimation**: Accurate state estimation is crucial for planning, control, and decision-making in Physical AI
+- **Uncertainty Quantification**: Properly quantifying and propagating uncertainty is essential for safe robot operation
+- **Robustness**: Sensor fusion provides robustness against individual sensor failures and environmental challenges

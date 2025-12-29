@@ -1,0 +1,144 @@
+---
+title: "Introduction to ROS 2"
+sidebar_position: 3
+---
+
+# Introduction to ROS 2
+
+## Definition
+
+ROS 2 (Robot Operating System 2) is a flexible framework for writing robot software that provides services designed for a heterogeneous computer cluster. Unlike traditional operating systems, ROS 2 is a collection of tools, libraries, and conventions that aim to simplify the task of creating complex and robust robot behavior across a wide variety of robot platforms. It serves as the foundational middleware for Physical AI systems, enabling communication between different software components and hardware devices.
+
+## Core Architecture
+
+ROS 2 is built on Data Distribution Service (DDS) which provides a publish-subscribe communication model. This architecture allows for:
+
+- **Decentralized Communication**: Nodes can communicate without a central master
+- **Language Independence**: Support for multiple programming languages including C++, Python, and Rust
+- **Real-time Capabilities**: Deterministic behavior for time-critical applications
+- **Security**: Built-in security features for authenticated and encrypted communication
+
+The architecture consists of several key components:
+
+1. **Nodes**: Basic computational elements that perform processing
+2. **Topics**: Named buses over which nodes exchange messages
+3. **Services**: Synchronous request/response communication patterns
+4. **Actions**: Asynchronous communication for long-running tasks
+5. **Parameters**: Configuration values that can be changed at runtime
+
+## How It Works in Physical AI Context
+
+ROS 2 serves as the backbone for Physical AI systems by providing standardized interfaces for:
+
+- Sensor data processing and fusion
+- Motion planning and control
+- Perception algorithms
+- Navigation and path planning
+- Human-robot interaction
+
+The distributed nature of ROS 2 allows different parts of a Physical AI system to run on different hardware platforms, from embedded systems on the robot to cloud-based processing units.
+
+## Example: Basic ROS 2 Node for Physical AI
+
+Here's a basic example of a ROS 2 node that could be part of a Physical AI system:
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import LaserScan
+from geometry_msgs.msg import Twist
+from std_msgs.msg import String
+
+class PhysicalAISensorNode(Node):
+    """
+    A ROS 2 node that processes sensor data and makes decisions
+    for a Physical AI system
+    """
+
+    def __init__(self):
+        super().__init__('physical_ai_sensor_node')
+
+        # Create subscriber for laser scanner
+        self.scan_subscription = self.create_subscription(
+            LaserScan,
+            'scan',
+            self.scan_callback,
+            10
+        )
+
+        # Create publisher for movement commands
+        self.cmd_publisher = self.create_publisher(
+            Twist,
+            'cmd_vel',
+            10
+        )
+
+        # Create publisher for status messages
+        self.status_publisher = self.create_publisher(
+            String,
+            'status',
+            10
+        )
+
+        # Timer for periodic processing
+        self.timer = self.create_timer(0.1, self.process_data)
+
+        self.latest_scan = None
+        self.obstacle_detected = False
+
+        self.get_logger().info('Physical AI Sensor Node initialized')
+
+    def scan_callback(self, msg):
+        """Process incoming laser scan data"""
+        self.latest_scan = msg
+        # Simple obstacle detection
+        if msg.ranges:
+            min_distance = min([r for r in msg.ranges if r > 0 and not r > 10])
+            self.obstacle_detected = min_distance < 0.5  # 0.5m threshold
+
+    def process_data(self):
+        """Process sensor data and make decisions"""
+        if self.latest_scan is not None:
+            status_msg = String()
+            if self.obstacle_detected:
+                status_msg.data = "Obstacle detected, navigating around"
+                self.status_publisher.publish(status_msg)
+
+                # Send movement command to avoid obstacle
+                cmd_msg = Twist()
+                cmd_msg.angular.z = 0.5  # Turn to avoid
+                cmd_msg.linear.x = 0.0   # Stop forward motion
+                self.cmd_publisher.publish(cmd_msg)
+            else:
+                status_msg.data = "Clear path, proceeding"
+                self.status_publisher.publish(status_msg)
+
+                # Continue forward
+                cmd_msg = Twist()
+                cmd_msg.linear.x = 0.3   # Move forward
+                cmd_msg.angular.z = 0.0  # No turning
+                self.cmd_publisher.publish(cmd_msg)
+
+def main(args=None):
+    rclpy.init(args=args)
+    sensor_node = PhysicalAISensorNode()
+
+    try:
+        rclpy.spin(sensor_node)
+    except KeyboardInterrupt:
+        sensor_node.get_logger().info('Shutting down Physical AI Sensor Node')
+    finally:
+        sensor_node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+## Key Takeaways
+
+- ROS 2 provides a distributed computing framework for Physical AI systems
+- Its publish-subscribe model enables loose coupling between components
+- DDS-based architecture supports real-time and safety-critical applications
+- Multi-language support allows integration of diverse algorithms and tools
+- Standardized message types facilitate interoperability between different robots and systems

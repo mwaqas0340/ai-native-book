@@ -1,0 +1,426 @@
+---
+title: "Lab Exercise: Creating a Simple ROS 2 Node"
+sidebar_position: 9
+---
+
+# Lab Exercise: Creating a Simple ROS 2 Node for Physical AI Applications
+
+## Definition
+
+This lab exercise provides hands-on experience in creating a complete ROS 2 node specifically designed for Physical AI applications. You will implement a sensor fusion node that processes data from multiple sensors and makes decisions for robot navigation. This exercise reinforces the concepts of node structure, message passing, and safety considerations in Physical AI systems.
+
+## Learning Objectives
+
+By completing this lab exercise, you will be able to:
+- Create a complete ROS 2 node using Python
+- Implement proper node lifecycle management
+- Subscribe to multiple sensor topics and process data
+- Publish commands to robot actuators
+- Implement safety checks and validation
+- Apply best practices for Physical AI applications
+
+## Prerequisites
+
+Before starting this lab exercise, ensure you have:
+- ROS 2 Humble Hawksbill installed (or equivalent)
+- Python 3.8 or higher
+- Basic understanding of ROS 2 concepts (nodes, topics, messages)
+- A working ROS 2 workspace setup
+
+## Lab Exercise: Physical AI Sensor Fusion Node
+
+### Step 1: Create the Package
+
+First, create a new ROS 2 package for our Physical AI node:
+
+```bash
+cd ~/ros2_ws/src
+ros2 pkg create --build-type ament_python physical_ai_lab
+cd physical_ai_lab
+```
+
+### Step 2: Create the Node Implementation
+
+Create the main node file at `physical_ai_lab/physical_ai_lab/sensor_fusion_node.py`:
+
+```python
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from sensor_msgs.msg import LaserScan, Imu, JointState
+from geometry_msgs.msg import Twist, Point
+from std_msgs.msg import Bool, Float32
+from builtin_interfaces.msg import Time
+import threading
+import math
+from collections import deque
+import numpy as np
+
+
+class PhysicalAISensorFusionNode(Node):
+    """
+    A ROS 2 node that demonstrates sensor fusion for Physical AI applications.
+    It processes data from multiple sensors and makes navigation decisions.
+    """
+
+    def __init__(self):
+        super().__init__('physical_ai_sensor_fusion_node')
+
+        # Configure QoS profiles for different data types
+        sensor_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST
+        )
+
+        command_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST
+        )
+
+        # Publishers
+        self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', command_qos)
+        self.safety_status_pub = self.create_publisher(Bool, 'safety_status', command_qos)
+        self.obstacle_distance_pub = self.create_publisher(Float32, 'obstacle_distance', sensor_qos)
+
+        # Subscribers
+        self.scan_sub = self.create_subscription(
+            LaserScan, 'scan', self.scan_callback, sensor_qos
+        )
+        self.imu_sub = self.create_subscription(
+            Imu, 'imu/data', self.imu_callback, sensor_qos
+        )
+        self.joint_state_sub = self.create_subscription(
+            JointState, 'joint_states', self.joint_state_callback, sensor_qos
+        )
+
+        # Timers
+        self.control_timer = self.create_timer(0.05, self.control_loop)  # 20Hz control loop
+        self.safety_timer = self.create_timer(0.1, self.safety_check)    # 10Hz safety checks
+
+        # Data storage with thread safety
+        self.data_lock = threading.RLock()
+        self.latest_scan = None
+        self.latest_imu = None
+        self.latest_joint_states = None
+        self.robot_state = {
+            'linear_velocity': 0.0,
+            'angular_velocity': 0.0,
+            'roll': 0.0,
+            'pitch': 0.0,
+            'yaw': 0.0,
+            'joint_positions': {},
+            'safety_status': True,
+            'obstacle_distance': float('inf')
+        }
+
+        # Data history for analysis
+        self.scan_history = deque(maxlen=10)
+
+        self.get_logger().info('Physical AI Sensor Fusion Node initialized')
+
+    def scan_callback(self, msg):
+        """Process laser scan data for obstacle detection"""
+        with self.data_lock:
+            self.latest_scan = msg
+            self.scan_history.append(msg)
+
+            # Process scan data to find closest obstacle
+            if msg.ranges:
+                valid_ranges = [r for r in msg.ranges if 0 < r < msg.range_max and not math.isinf(r)]
+                if valid_ranges:
+                    self.robot_state['obstacle_distance'] = min(valid_ranges)
+                else:
+                    self.robot_state['obstacle_distance'] = float('inf')
+
+                # Publish obstacle distance
+                distance_msg = Float32()
+                distance_msg.data = self.robot_state['obstacle_distance']
+                self.obstacle_distance_pub.publish(distance_msg)
+
+    def imu_callback(self, msg):
+        """Process IMU data for orientation and acceleration"""
+        with self.data_lock:
+            self.latest_imu = msg
+
+            # Extract orientation (simplified - assuming quaternion is provided)
+            orientation = msg.orientation
+            # Convert quaternion to Euler angles (simplified)
+            # In practice, use tf2 for proper quaternion operations
+            self.robot_state['roll'] = 0.0  # Simplified
+            self.robot_state['pitch'] = 0.0  # Simplified
+            # Calculate yaw from quaternion
+            sinr_cosp = 2 * (orientation.w * orientation.z + orientation.x * orientation.y)
+            cosr_cosp = 1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z)
+            self.robot_state['yaw'] = math.atan2(sinr_cosp, cosr_cosp)
+
+    def joint_state_callback(self, msg):
+        """Process joint state data"""
+        with self.data_lock:
+            self.latest_joint_states = msg
+            # Update joint positions
+            for i, name in enumerate(msg.name):
+                if i < len(msg.position):
+                    self.robot_state['joint_positions'][name] = msg.position[i]
+
+    def control_loop(self):
+        """Main control loop for the robot"""
+        with self.data_lock:
+            if not self.robot_state['safety_status']:
+                # Robot is in unsafe state, stop movement
+                self._publish_stop_command()
+                return
+
+            # Implement simple navigation logic
+            cmd_vel = Twist()
+
+            if self.robot_state['obstacle_distance'] < 0.5:  # 50cm threshold
+                # Obstacle detected, turn to avoid
+                cmd_vel.linear.x = 0.0
+                cmd_vel.angular.z = 0.5  # Turn right
+                self.get_logger().info(f'Obstacle detected at {self.robot_state["obstacle_distance"]:.2f}m, turning to avoid')
+            elif self.robot_state['obstacle_distance'] < 1.0:  # 1m threshold
+                # Obstacle nearby, slow down and be cautious
+                cmd_vel.linear.x = 0.2  # Slow forward
+                cmd_vel.angular.z = 0.0
+            else:
+                # Clear path, move forward
+                cmd_vel.linear.x = 0.5  # Normal forward speed
+                cmd_vel.angular.z = 0.0
+
+            # Publish command
+            self.cmd_vel_pub.publish(cmd_vel)
+            self.robot_state['linear_velocity'] = cmd_vel.linear.x
+            self.robot_state['angular_velocity'] = cmd_vel.angular.z
+
+    def safety_check(self):
+        """Perform safety checks"""
+        with self.data_lock:
+            # Check if sensor data is stale
+            safety_ok = True
+            safety_reasons = []
+
+            # Check if we have recent scan data
+            if self.latest_scan is None:
+                safety_ok = False
+                safety_reasons.append("No recent scan data")
+            else:
+                # Check for sensor errors (simplified)
+                if self.robot_state['obstacle_distance'] < 0.1:  # Too close to be realistic
+                    safety_ok = False
+                    safety_reasons.append("Invalid obstacle distance reading")
+
+            # Check IMU data (simplified)
+            if self.latest_imu is None:
+                safety_ok = False
+                safety_reasons.append("No recent IMU data")
+
+            # Check for extreme values
+            if abs(self.robot_state['roll']) > 1.0 or abs(self.robot_state['pitch']) > 1.0:
+                safety_ok = False
+                safety_reasons.append("Excessive tilt detected")
+
+            # Update safety status
+            self.robot_state['safety_status'] = safety_ok
+
+            # Publish safety status
+            safety_msg = Bool()
+            safety_msg.data = safety_ok
+            self.safety_status_pub.publish(safety_msg)
+
+            if not safety_ok:
+                self.get_logger().error(f'Safety check failed: {", ".join(safety_reasons)}')
+                # Stop robot if safety is compromised
+                self._publish_stop_command()
+
+    def _publish_stop_command(self):
+        """Publish stop command to halt robot movement"""
+        stop_cmd = Twist()
+        self.cmd_vel_pub.publish(stop_cmd)
+        self.robot_state['linear_velocity'] = 0.0
+        self.robot_state['angular_velocity'] = 0.0
+
+    def get_robot_state(self):
+        """Get current robot state (thread-safe)"""
+        with self.data_lock:
+            return self.robot_state.copy()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = PhysicalAISensorFusionNode()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info('Shutting down Physical AI Sensor Fusion Node')
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+### Step 3: Create the Setup File
+
+Create `setup.py` in the package root:
+
+```python
+from setuptools import find_packages, setup
+
+package_name = 'physical_ai_lab'
+
+setup(
+    name=package_name,
+    version='0.0.1',
+    packages=find_packages(exclude=['test']),
+    data_files=[
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+    ],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='Your Name',
+    maintainer_email='your.email@example.com',
+    description='Lab exercise for Physical AI sensor fusion node',
+    license='Apache-2.0',
+    tests_require=['pytest'],
+    entry_points={
+        'console_scripts': [
+            'sensor_fusion_node = physical_ai_lab.sensor_fusion_node:main',
+        ],
+    },
+)
+```
+
+### Step 4: Create the Package XML
+
+Create `package.xml`:
+
+```xml
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>physical_ai_lab</name>
+  <version>0.0.1</version>
+  <description>Lab exercise for Physical AI sensor fusion node</description>
+  <maintainer email="your.email@example.com">Your Name</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>builtin_interfaces</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
+```
+
+### Step 5: Build and Run the Package
+
+```bash
+cd ~/ros2_ws
+colcon build --packages-select physical_ai_lab
+source install/setup.bash
+
+# Run the node
+ros2 run physical_ai_lab sensor_fusion_node
+```
+
+## How It Works in Physical AI Context
+
+This lab exercise demonstrates several key concepts relevant to Physical AI systems:
+
+### Sensor Fusion
+- The node integrates data from multiple sensors (laser scanner, IMU, joint states)
+- This represents how Physical AI systems must combine information from various sources to understand their environment
+
+### Safety Considerations
+- The implementation includes comprehensive safety checks
+- The robot stops when safety is compromised, which is crucial for Physical AI systems that interact with the real world
+
+### Real-time Processing
+- The control loop runs at 20Hz, demonstrating real-time processing requirements
+- The safety checks run at 10Hz, showing the need for continuous monitoring
+
+### Decision Making
+- The node makes navigation decisions based on sensor data
+- This represents the decision-making component of Physical AI systems
+
+## Example: Testing the Node
+
+To test the node, you can create a simple publisher that sends mock laser scan data:
+
+```python
+# test_publisher.py
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Header
+import math
+
+class TestPublisher(Node):
+    def __init__(self):
+        super().__init__('test_publisher')
+        self.publisher = self.create_publisher(LaserScan, 'scan', 10)
+        self.timer = self.create_timer(0.1, self.publish_scan)
+        self.angle = 0.0
+
+    def publish_scan(self):
+        msg = LaserScan()
+        msg.header = Header()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'laser_frame'
+
+        msg.angle_min = -math.pi / 2
+        msg.angle_max = math.pi / 2
+        msg.angle_increment = math.pi / 180  # 1 degree
+        msg.time_increment = 0.0
+        msg.scan_time = 0.1
+        msg.range_min = 0.1
+        msg.range_max = 10.0
+
+        # Create ranges array
+        num_ranges = int((msg.angle_max - msg.angle_min) / msg.angle_increment) + 1
+        msg.ranges = [2.0 + 0.5 * math.sin(self.angle + i * 0.1) for i in range(num_ranges)]
+
+        self.publisher.publish(msg)
+        self.angle += 0.1
+
+def main(args=None):
+    rclpy.init(args=args)
+    publisher = TestPublisher()
+
+    try:
+        rclpy.spin(publisher)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        publisher.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+## Key Takeaways
+
+- **Modular Design**: The node follows ROS 2 best practices with clear separation of concerns
+- **Safety First**: Comprehensive safety checks ensure safe operation in Physical AI applications
+- **Real-time Processing**: Proper timing and execution rates maintain real-time performance
+- **Sensor Integration**: Multiple sensor inputs are properly fused for decision making
+- **Thread Safety**: Proper locking mechanisms ensure safe access to shared data
+- **Error Handling**: Robust error handling prevents system failures
+- **ROS 2 Standards**: The implementation follows ROS 2 conventions and best practices

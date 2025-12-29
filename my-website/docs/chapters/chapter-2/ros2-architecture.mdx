@@ -1,0 +1,210 @@
+---
+title: "ROS 2 Architecture"
+sidebar_position: 4
+---
+
+# ROS 2 Architecture
+
+## Definition
+
+The ROS 2 architecture represents a significant evolution from ROS 1, built on the Data Distribution Service (DDS) standard. This middleware-based architecture provides a distributed computing framework that enables communication between different software components without requiring a central master. The architecture is designed to support real-time systems, multiple operating systems, and reliable communication patterns essential for Physical AI applications.
+
+## Core Components
+
+The ROS 2 architecture consists of several fundamental building blocks:
+
+1. **Nodes**: The basic computational units that perform processing tasks
+2. **DDS Implementation**: The underlying middleware that handles communication
+3. **Client Libraries**: rclcpp (C++) and rclpy (Python) provide language-specific interfaces
+4. **ROS Middleware (RMW)**: Abstraction layer that interfaces with DDS implementations
+5. **Launch System**: For managing complex systems with multiple nodes
+6. **Parameter System**: For runtime configuration management
+
+### Nodes and Processes
+
+In ROS 2, nodes are lightweight processes that encapsulate specific functionality. Each node can contain:
+
+- Publishers and subscribers for topic-based communication
+- Services and clients for request-response communication
+- Action servers and clients for goal-oriented communication
+- Parameters for configuration
+- Timers and callbacks for periodic execution
+
+### Communication Patterns
+
+ROS 2 supports three primary communication patterns:
+
+- **Topics**: Asynchronous publish-subscribe communication
+- **Services**: Synchronous request-response communication
+- **Actions**: Asynchronous goal-oriented communication with feedback
+
+## How It Works in Physical AI Systems
+
+The ROS 2 architecture is particularly well-suited for Physical AI systems due to:
+
+- **Distributed Execution**: Different aspects of perception, planning, and control can run on separate nodes
+- **Real-time Capabilities**: DDS-based communication supports deterministic timing requirements
+- **Multi-platform Support**: Nodes can run on different hardware platforms and operating systems
+- **Security**: Built-in authentication and encryption for safe robot operation
+- **Fault Tolerance**: Decentralized architecture prevents single points of failure
+
+## Example: ROS 2 Architecture Implementation
+
+Here's an example of how the ROS 2 architecture can be implemented for a Physical AI system:
+
+```python
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from sensor_msgs.msg import Image, LaserScan
+from geometry_msgs.msg import Twist
+from std_srvs.srv import SetBool
+from action_msgs.msg import GoalStatus
+from rclpy.action import ActionServer, GoalResponse, CancelResponse
+from example_interfaces.action import Fibonacci  # Example action
+
+class PhysicalAIRobotArchitecture(Node):
+    """
+    Demonstrates the ROS 2 architecture for a Physical AI system
+    """
+
+    def __init__(self):
+        super().__init__('physical_ai_robot_architecture')
+
+        # Configure QoS for different types of data
+        sensor_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST
+        )
+
+        cmd_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST
+        )
+
+        # Publishers for different subsystems
+        self.image_pub = self.create_publisher(Image, 'camera/image_raw', sensor_qos)
+        self.scan_pub = self.create_publisher(LaserScan, 'scan', sensor_qos)
+        self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', cmd_qos)
+
+        # Subscribers for sensor data
+        self.image_sub = self.create_subscription(
+            Image, 'camera/image_raw', self.image_callback, sensor_qos
+        )
+        self.scan_sub = self.create_subscription(
+            LaserScan, 'scan', self.scan_callback, sensor_qos
+        )
+
+        # Services for system control
+        self.emergency_stop_srv = self.create_service(
+            SetBool, 'emergency_stop', self.emergency_stop_callback
+        )
+
+        # Action server for complex tasks
+        self.fibonacci_action_server = ActionServer(
+            self,
+            Fibonacci,
+            'fibonacci',
+            execute_callback=self.execute_fibonacci,
+            goal_callback=self.goal_callback,
+            cancel_callback=self.cancel_callback
+        )
+
+        # Timer for main control loop
+        self.control_timer = self.create_timer(0.05, self.control_loop)  # 20Hz
+
+        self.get_logger().info('Physical AI Robot Architecture initialized')
+
+    def image_callback(self, msg):
+        """Process incoming image data"""
+        self.get_logger().debug(f'Received image: {msg.width}x{msg.height}')
+        # Image processing logic would go here
+
+    def scan_callback(self, msg):
+        """Process incoming laser scan data"""
+        if msg.ranges:
+            min_range = min([r for r in msg.ranges if r > 0], default=float('inf'))
+            self.get_logger().debug(f'Closest obstacle: {min_range:.2f}m')
+
+    def emergency_stop_callback(self, request, response):
+        """Handle emergency stop requests"""
+        if request.data:
+            self.get_logger().warn('EMERGENCY STOP ACTIVATED')
+            # Send stop command
+            stop_cmd = Twist()
+            self.cmd_pub.publish(stop_cmd)
+            response.success = True
+            response.message = 'Emergency stop activated'
+        else:
+            response.success = True
+            response.message = 'Emergency stop cleared'
+        return response
+
+    def goal_callback(self, goal_request):
+        """Accept or reject a goal"""
+        self.get_logger().info('Received goal request')
+        return GoalResponse.ACCEPT
+
+    def cancel_callback(self, goal_handle):
+        """Accept or reject a cancel request"""
+        self.get_logger().info('Received cancel request')
+        return CancelResponse.ACCEPT
+
+    async def execute_fibonacci(self, goal_handle):
+        """Execute a Fibonacci sequence goal"""
+        self.get_logger().info('Executing goal...')
+
+        feedback_msg = Fibonacci.Feedback()
+        feedback_msg.sequence = [0, 1]
+
+        for i in range(1, goal_handle.request.order):
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                self.get_logger().info('Goal canceled')
+                return Fibonacci.Result()
+
+            feedback_msg.sequence.append(
+                feedback_msg.sequence[i] + feedback_msg.sequence[i-1]
+            )
+
+            goal_handle.publish_feedback(feedback_msg)
+            self.get_logger().debug(f'Feedback: {feedback_msg.sequence}')
+
+        goal_handle.succeed()
+        result = Fibonacci.Result()
+        result.sequence = feedback_msg.sequence
+        self.get_logger().info(f'Result: {result.sequence}')
+
+        return result
+
+    def control_loop(self):
+        """Main control loop for the robot"""
+        # This would contain the main control logic
+        # combining perception, planning, and action
+        pass
+
+def main(args=None):
+    rclpy.init(args=args)
+    architecture_node = PhysicalAIRobotArchitecture()
+
+    try:
+        rclpy.spin(architecture_node)
+    except KeyboardInterrupt:
+        architecture_node.get_logger().info('Shutting down Physical AI Robot Architecture')
+    finally:
+        architecture_node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+## Key Takeaways
+
+- ROS 2's DDS-based architecture provides robust distributed communication
+- The layered design allows for flexibility and multiple DDS implementations
+- Quality of Service (QoS) profiles enable fine-tuning of communication behavior
+- The architecture supports real-time, safety-critical Physical AI applications
+- Built-in security features provide authentication and encryption capabilities

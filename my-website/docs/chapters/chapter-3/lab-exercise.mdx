@@ -1,0 +1,707 @@
+---
+title: "Lab Exercise: Creating a Simple Simulation Environment"
+sidebar_position: 9
+---
+
+# Lab Exercise: Creating a Simple Simulation Environment for Physical AI
+
+## Objective
+
+In this lab exercise, you will create a simple simulation environment using Gazebo and integrate it with ROS 2. You will learn how to set up a basic robot model, configure sensors, implement perception and control systems, and validate the simulation against real-world physics principles.
+
+## Prerequisites
+
+Before starting this lab exercise, ensure you have:
+
+- ROS 2 (Rolling or Humble) installed and properly configured
+- Gazebo Garden or Fortress installed
+- Basic knowledge of ROS 2 concepts (nodes, topics, messages)
+- Python 3.8+ and basic Python programming skills
+- Git for version control
+
+## Setup and Environment Configuration
+
+### 1. Create a Workspace
+
+First, create a new ROS 2 workspace for this simulation project:
+
+```bash
+mkdir -p ~/simulation_ws/src
+cd ~/simulation_ws
+```
+
+### 2. Install Required Dependencies
+
+```bash
+sudo apt update
+sudo apt install ros-humble-gazebo-ros-pkgs ros-humble-gazebo-ros ros-humble-ros-gz
+sudo apt install ros-humble-navigation2 ros-humble-nav2-bringup
+```
+
+### 3. Create a Simulation Package
+
+```bash
+cd ~/simulation_ws/src
+ros2 pkg create --build-type ament_python simulation_tutorial
+cd simulation_tutorial
+```
+
+## Exercise 1: Basic Robot Model Creation
+
+### 1.1 Create Robot Description
+
+Create a URDF (Unified Robot Description Format) file for a simple differential drive robot:
+
+```xml
+<?xml version="1.0"?>
+<robot name="simple_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Base Link -->
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <box size="0.5 0.3 0.15"/>
+      </geometry>
+      <material name="blue">
+        <color rgba="0 0 1 0.8"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.5 0.3 0.15"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="0.0" izz="0.01"/>
+    </inertial>
+  </link>
+
+  <!-- Left Wheel -->
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <origin xyz="0 0.175 -0.05" rpy="1.570796 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+
+  <link name="left_wheel">
+    <visual>
+      <geometry>
+        <cylinder radius="0.05" length="0.05"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0 0 0 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="0.05" length="0.05"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
+    </inertial>
+  </link>
+
+  <!-- Right Wheel -->
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0 -0.175 -0.05" rpy="1.570796 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+
+  <link name="right_wheel">
+    <visual>
+      <geometry>
+        <cylinder radius="0.05" length="0.05"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0 0 0 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="0.05" length="0.05"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
+    </inertial>
+  </link>
+
+  <!-- Camera -->
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0.2 0 0.05" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_link">
+    <visual>
+      <geometry>
+        <box size="0.05 0.05 0.05"/>
+      </geometry>
+      <material name="red">
+        <color rgba="1 0 0 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.05 0.05 0.05"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="0.0001" ixy="0.0" ixz="0.0" iyy="0.0001" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <!-- Gazebo Plugins -->
+  <gazebo reference="base_link">
+    <material>Gazebo/Blue</material>
+  </gazebo>
+
+  <gazebo reference="left_wheel">
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+  <gazebo reference="right_wheel">
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+  <gazebo reference="camera_link">
+    <material>Gazebo/Red</material>
+  </gazebo>
+
+  <!-- Differential Drive Plugin -->
+  <gazebo>
+    <plugin filename="libgazebo_ros_diff_drive.so" name="differential_drive">
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>0.35</wheel_separation>
+      <wheel_diameter>0.1</wheel_diameter>
+      <max_wheel_torque>20</max_wheel_torque>
+      <max_wheel_acceleration>1.0</max_wheel_acceleration>
+      <command_topic>/cmd_vel</command_topic>
+      <odometry_topic>/odom</odometry_topic>
+      <odometry_frame>odom</odometry_frame>
+      <robot_base_frame>base_link</robot_base_frame>
+      <publish_odom>true</publish_odom>
+      <publish_odom_tf>true</publish_odom_tf>
+      <publish_wheel_tf>true</publish_wheel_tf>
+    </plugin>
+  </gazebo>
+
+  <!-- Camera Plugin -->
+  <gazebo reference="camera_link">
+    <sensor name="camera" type="camera">
+      <always_on>true</always_on>
+      <update_rate>30.0</update_rate>
+      <camera name="head">
+        <horizontal_fov>1.3962634</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.05</near>
+          <far>3</far>
+        </clip>
+      </camera>
+      <plugin name="camera_controller" filename="libgazebo_ros_camera.so">
+        <frame_name>camera_link</frame_name>
+        <topic_name>/camera/image_raw</topic_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+</robot>
+```
+
+### 1.2 Save the URDF file
+
+Save this content as `simple_robot.urdf` in the `simulation_tutorial/urdf/` directory:
+
+```bash
+mkdir -p simulation_tutorial/urdf
+# Save the URDF content to simple_robot.urdf
+```
+
+## Exercise 2: Launch File Configuration
+
+Create a launch file to start the simulation:
+
+```python
+# simulation_tutorial/launch/simulation_launch.py
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+
+
+def generate_launch_description():
+    # Launch arguments
+    use_sim_time = LaunchConfiguration('use_sim_time', default='true')
+    world = LaunchConfiguration('world', default='empty.sdf')
+
+    # Paths
+    pkg_gazebo_ros = FindPackageShare('gazebo_ros')
+    pkg_simulation_tutorial = FindPackageShare('simulation_tutorial')
+
+    # Gazebo launch
+    gazebo = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([pkg_gazebo_ros, 'launch', 'gazebo.launch.py'])
+        ]),
+        launch_arguments={
+            'world': PathJoinSubstitution([FindPackageShare('gazebo_ros'), 'worlds', world]),
+            'verbose': 'false',
+        }.items()
+    )
+
+    # Robot state publisher
+    robot_state_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='robot_state_publisher',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'robot_description': PathJoinSubstitution([
+                pkg_simulation_tutorial, 'urdf', 'simple_robot.urdf'
+            ])
+        }]
+    )
+
+    # Spawn entity
+    spawn_entity = Node(
+        package='gazebo_ros',
+        executable='spawn_entity.py',
+        arguments=[
+            '-topic', 'robot_description',
+            '-entity', 'simple_robot',
+            '-x', '0.0',
+            '-y', '0.0',
+            '-z', '0.1'
+        ],
+        output='screen'
+    )
+
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='true',
+            description='Use simulation (Gazebo) clock if true'
+        ),
+        DeclareLaunchArgument(
+            'world',
+            default_value='empty.sdf',
+            description='Choose one of the world files from `/usr/share/gazebo-11/worlds`'
+        ),
+        gazebo,
+        robot_state_publisher,
+        spawn_entity,
+    ])
+```
+
+## Exercise 3: Simulation Node Implementation
+
+Create a ROS 2 node that interacts with the simulation:
+
+```python
+# simulation_tutorial/simulation_node.py
+
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image, LaserScan, Imu
+from geometry_msgs.msg import Twist, Pose, Point
+from nav_msgs.msg import Odometry
+from std_msgs.msg import Bool, Float32, String
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+import numpy as np
+import cv2
+from cv_bridge import CvBridge
+import threading
+import math
+from geometry_msgs.msg import PointStamped
+from visualization_msgs.msg import Marker
+from tf2_ros import TransformBroadcaster
+
+
+class SimulationLabNode(Node):
+    """
+    A ROS 2 node for the simulation lab exercise
+    """
+
+    def __init__(self):
+        super().__init__('simulation_lab_node')
+
+        # QoS profiles for different data types
+        sensor_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        cmd_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
+
+        # Publishers for robot commands and simulation interaction
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', cmd_qos)
+        self.object_detection_pub = self.create_publisher(PointStamped, '/detected_objects', cmd_qos)
+        self.visualization_pub = self.create_publisher(Marker, '/simulation_visualization', cmd_qos)
+
+        # Subscribers for simulated sensor data
+        self.camera_sub = self.create_subscription(
+            Image, '/camera/image_raw', self.camera_callback, sensor_qos
+        )
+        self.odom_sub = self.create_subscription(
+            Odometry, '/odom', self.odom_callback, sensor_qos
+        )
+
+        # Initialize data processing components
+        self.cv_bridge = CvBridge()
+        self.tf_broadcaster = TransformBroadcaster(self)
+        self.data_lock = threading.RLock()
+
+        # Simulation data storage
+        self.latest_camera_image = None
+        self.current_pose = Pose()
+        self.current_twist = Twist()
+
+        # Simulation parameters
+        self.linear_speed = 0.3  # m/s
+        self.angular_speed = 0.5  # rad/s
+        self.safety_distance = 0.5  # meters
+
+        # Timers for different simulation tasks
+        self.perception_timer = self.create_timer(0.033, self.perception_processing)  # ~30Hz
+        self.control_timer = self.create_timer(0.05, self.control_loop)              # 20Hz
+        self.visualization_timer = self.create_timer(0.2, self.visualization_loop)   # 5Hz
+
+        self.get_logger().info('Simulation Lab Node initialized')
+
+    def camera_callback(self, msg):
+        """Process camera data from simulation"""
+        try:
+            with self.data_lock:
+                cv_image = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+                self.latest_camera_image = cv_image.copy()
+        except Exception as e:
+            self.get_logger().error(f'Error processing camera image: {e}')
+
+    def odom_callback(self, msg):
+        """Process odometry data from simulation"""
+        with self.data_lock:
+            self.current_pose = msg.pose.pose
+            self.current_twist = msg.twist.twist
+
+    def perception_processing(self):
+        """Process perception data from simulation"""
+        with self.data_lock:
+            if self.latest_camera_image is None:
+                return
+
+            # Process camera image for object detection
+            objects = self.detect_objects_in_image(self.latest_camera_image)
+
+            # Log detected objects
+            if objects:
+                self.get_logger().info(f'Detected {len(objects)} objects in simulation')
+
+            # Publish detected objects
+            for obj in objects:
+                point_msg = PointStamped()
+                point_msg.header = self.get_clock().now().to_msg()
+                point_msg.header.frame_id = 'camera_link'
+                point_msg.point.x = obj['center'][0] / 100.0  # Scale to meters
+                point_msg.point.y = obj['center'][1] / 100.0  # Scale to meters
+                point_msg.point.z = 1.0  # Default depth
+                self.object_detection_pub.publish(point_msg)
+
+    def detect_objects_in_image(self, image):
+        """Detect objects in the camera image"""
+        # Convert BGR to HSV for color-based detection
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        # Define color ranges for common objects (red, blue, green)
+        lower_red = np.array([0, 50, 50])
+        upper_red = np.array([10, 255, 255])
+        lower_blue = np.array([100, 50, 50])
+        upper_blue = np.array([130, 255, 255])
+        lower_green = np.array([40, 50, 50])
+        upper_green = np.array([80, 255, 255])
+
+        # Create masks
+        mask_red = cv2.inRange(hsv, lower_red, upper_red)
+        mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+        mask_green = cv2.inRange(hsv, lower_green, upper_green)
+
+        combined_mask = mask_red | mask_blue | mask_green
+
+        # Find contours
+        contours, _ = cv2.findContours(
+            combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        objects = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > 200:  # Filter small contours
+                x, y, w, h = cv2.boundingRect(contour)
+                center_x, center_y = x + w//2, y + h//2
+
+                objects.append({
+                    'bbox': (x, y, w, h),
+                    'center': (center_x, center_y),
+                    'area': area,
+                    'color': 'red' if cv2.contourArea(contour & mask_red) > 0 else
+                            'blue' if cv2.contourArea(contour & mask_blue) > 0 else 'green'
+                })
+
+        return objects
+
+    def control_loop(self):
+        """Main control loop for the simulation"""
+        with self.data_lock:
+            # Simple navigation - move forward unless camera detects something
+            if self.latest_camera_image is not None:
+                # Simple obstacle detection based on image processing
+                # In a real scenario, you'd use LIDAR or more sophisticated processing
+                height, width = self.latest_camera_image.shape[:2]
+
+                # Look at the center region of the image for obstacles
+                center_region = self.latest_camera_image[height//3:2*height//3, width//3:2*width//3]
+
+                # Convert to grayscale and check for significant features
+                gray_center = cv2.cvtColor(center_region, cv2.COLOR_BGR2GRAY)
+                edges = cv2.Canny(gray_center, 50, 150)
+
+                # Count significant edges (potential obstacles)
+                edge_count = np.count_nonzero(edges > 0)
+
+                cmd_vel = Twist()
+                if edge_count > 500:  # Threshold for obstacle detection
+                    # Obstacle detected - turn to avoid
+                    cmd_vel.linear.x = 0.0
+                    cmd_vel.angular.z = self.angular_speed
+                    self.get_logger().info('Obstacle detected - turning')
+                else:
+                    # Clear path - move forward
+                    cmd_vel.linear.x = self.linear_speed
+                    cmd_vel.angular.z = 0.0
+
+                self.cmd_vel_pub.publish(cmd_vel)
+
+    def visualization_loop(self):
+        """Publish visualization markers for the simulation"""
+        with self.data_lock:
+            # Create a marker to visualize robot position
+            marker = Marker()
+            marker.header = self.get_clock().now().to_msg()
+            marker.header.frame_id = 'map'
+            marker.ns = 'simulation_lab'
+            marker.id = 0
+            marker.type = Marker.CUBE
+            marker.action = Marker.ADD
+
+            # Position from odometry
+            marker.pose.position = self.current_pose.position
+            marker.pose.orientation = self.current_pose.orientation
+
+            # Scale
+            marker.scale.x = 0.5
+            marker.scale.y = 0.3
+            marker.scale.z = 0.15
+
+            # Color
+            marker.color.r = 0.0
+            marker.color.g = 0.0
+            marker.color.b = 1.0  # Blue
+            marker.color.a = 0.8
+
+            self.visualization_pub.publish(marker)
+
+    def get_robot_state(self):
+        """Get current robot state"""
+        with self.data_lock:
+            return {
+                'position': (self.current_pose.position.x,
+                           self.current_pose.position.y,
+                           self.current_pose.position.z),
+                'orientation': (self.current_pose.orientation.x,
+                              self.current_pose.orientation.y,
+                              self.current_pose.orientation.z,
+                              self.current_pose.orientation.w),
+                'linear_velocity': (self.current_twist.twist.linear.x,
+                                  self.current_twist.twist.linear.y,
+                                  self.current_twist.twist.linear.z),
+                'angular_velocity': (self.current_twist.twist.angular.x,
+                                   self.current_twist.twist.angular.y,
+                                   self.current_twist.twist.angular.z),
+                'has_camera_image': self.latest_camera_image is not None
+            }
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = SimulationLabNode()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info('Shutting down Simulation Lab Node')
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+## Exercise 4: Package Configuration
+
+Create the package configuration file:
+
+```python
+# simulation_tutorial/setup.py
+
+from setuptools import setup
+import os
+from glob import glob
+
+package_name = 'simulation_tutorial'
+
+setup(
+    name=package_name,
+    version='0.0.1',
+    packages=[package_name],
+    data_files=[
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+        # Include launch files
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        # Include URDF files
+        (os.path.join('share', package_name, 'urdf'), glob('urdf/*.urdf')),
+    ],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='Your Name',
+    maintainer_email='your.email@example.com',
+    description='Simulation tutorial package',
+    license='Apache License 2.0',
+    tests_require=['pytest'],
+    entry_points={
+        'console_scripts': [
+            'simulation_node = simulation_tutorial.simulation_node:main',
+        ],
+    },
+)
+```
+
+## Exercise 5: Running the Simulation
+
+### 5.1 Build the Package
+
+```bash
+cd ~/simulation_ws
+colcon build --packages-select simulation_tutorial
+source install/setup.bash
+```
+
+### 5.2 Launch the Simulation
+
+```bash
+ros2 launch simulation_tutorial simulation_launch.py
+```
+
+### 5.3 Run the Simulation Node
+
+In a new terminal:
+
+```bash
+cd ~/simulation_ws
+source install/setup.bash
+ros2 run simulation_tutorial simulation_node
+```
+
+## Exercise 6: Experimentation and Analysis
+
+### 6.1 Experiment with Different Parameters
+
+Try modifying the following parameters in your simulation:
+
+- Robot wheel separation and diameter
+- Camera field of view and resolution
+- Control speeds and thresholds
+- Object detection sensitivity
+
+### 6.2 Add Additional Sensors
+
+Extend the robot model to include additional sensors:
+
+- LIDAR sensor
+- IMU sensor
+- GPS sensor
+
+### 6.3 Implement Advanced Behaviors
+
+Implement more sophisticated behaviors such as:
+
+- Wall following
+- Obstacle avoidance with path planning
+- Object following
+- Mapping and navigation
+
+## Exercise 7: Validation and Testing
+
+### 7.1 Validate Physics Accuracy
+
+Compare the simulated robot's behavior with expected physics:
+
+- Verify that the robot moves at the expected speed
+- Check that turning behavior matches the wheel configuration
+- Validate that collision detection works properly
+
+### 7.2 Performance Testing
+
+Test the simulation performance:
+
+- Monitor frame rates and CPU usage
+- Test with multiple robots in the same environment
+- Evaluate sensor update rates
+
+## Assessment Questions
+
+1. How does the differential drive plugin control the robot's movement?
+2. What are the advantages of using simulation before real-world deployment?
+3. How would you modify the robot model to include a LIDAR sensor?
+4. What factors affect the accuracy of sim-to-real transfer?
+5. How can you validate that your simulation accurately represents real-world physics?
+
+## Troubleshooting
+
+### Common Issues:
+
+- **Robot not spawning**: Check that the URDF file is properly formatted and the spawn topic is correct
+- **No camera feed**: Verify that the camera plugin is properly configured in the URDF
+- **Control commands not working**: Ensure that the command topic names match between the controller and the simulation plugin
+- **Performance issues**: Reduce the simulation complexity or adjust the physics parameters
+
+## Key Takeaways
+
+This lab exercise has provided hands-on experience with:
+
+1. **Robot Modeling**: Creating URDF files for robot representation in simulation
+2. **Simulation Environment**: Setting up Gazebo with ROS 2 integration
+3. **Sensor Integration**: Adding and configuring sensors in the simulation
+4. **Control Systems**: Implementing ROS 2 nodes for robot control
+5. **Perception Systems**: Processing sensor data for navigation and interaction
+6. **Validation**: Testing and validating simulation accuracy
+
+The skills developed in this lab form the foundation for more advanced Physical AI applications using simulation environments. The integration of simulation with ROS 2 provides a powerful framework for developing, testing, and validating robotics applications before deployment to real hardware.
