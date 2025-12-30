@@ -20,6 +20,8 @@ const config: Config = {
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: '/',
 
+  trailingSlash: true,
+
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
   organizationName: 'your-org', // Usually your GitHub org/user name.
@@ -119,23 +121,23 @@ const config: Config = {
           items: [
             {
               label: 'Chapter 1',
-              to: '/docs/chapters/chapter-1/',
+              to: '/docs/chapters/chapter-1',
             },
             {
               label: 'Chapter 2',
-              to: '/docs/chapters/chapter-2/',
+              to: '/docs/chapters/chapter-2',
             },
             {
               label: 'Chapter 3',
-              to: '/docs/chapters/chapter-3/',
+              to: '/docs/chapters/chapter-3',
             },
             {
               label: 'Chapter 4',
-              to: '/docs/chapters/chapter-4/',
+              to: '/docs/chapters/chapter-4',
             },
             {
               label: 'Chapter 5',
-              to: '/docs/chapters/chapter-5/',
+              to: '/docs/chapters/chapter-5',
             },
           ],
         },
